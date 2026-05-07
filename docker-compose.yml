@@ -8,7 +8,6 @@ services:
     env_file:
       - .env
     environment:
-      # 与容器内监听端口一致（Dockerfile EXPOSE 8000）
       PORT: "8000"
     ports:
       - "${PORT:-8000}:8000"
@@ -23,7 +22,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
+    depends_on:
+      - napcat  # 确保napcat先启动
+
+  # 新增：把NapCat服务直接加入这个compose
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    volumes:
+      - /root/napcat/config:/app/.config/QQ
