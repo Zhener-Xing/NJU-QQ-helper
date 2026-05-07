@@ -25,7 +25,5 @@ services:
       - .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "${BRIDGE_WS_PORT:-4000}:4000"
     volumes:
       - ./data:/app/data
