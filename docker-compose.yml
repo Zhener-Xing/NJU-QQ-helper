@@ -5,6 +5,11 @@ services:
       dockerfile: Dockerfile.web
     container_name: nju-qq-helper-web
     restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 与容器内监听端口一致（Dockerfile EXPOSE 8000）
+      PORT: "8000"
     ports:
       - "${PORT:-8000}:8000"
     volumes:
