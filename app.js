@@ -236,7 +236,7 @@ async function requestAI() {
   if (!Array.isArray(data.activities)) {
     throw new Error("AI 返回格式错误，缺少 activities 数组");
   }
-  return data.activities;
+  return data;
 }
 
 aiForm.addEventListener("submit", async (event) => {
@@ -248,9 +248,21 @@ aiForm.addEventListener("submit", async (event) => {
   button.textContent = "处理中...";
 
   try {
-    const activities = await requestAI();
-    addActivities(activities);
-    alert(`成功同步 ${activities.length} 条活动`);
+    const result = await requestAI();
+    addActivities(result.activities);
+
+    if (result.activities.length === 0) {
+      const debug = result.debug || {};
+      alert(
+        `同步到 0 条活动。\n` +
+          `消息日志条数: ${debug.messageLogCount ?? 0}\n` +
+          `回溯扫描消息数: ${debug.scannedMessages ?? 0}\n` +
+          `AI密钥已配置: ${debug.hasApiKey ? "是" : "否"}\n` +
+          `最近消息时间: ${debug.lastMessageTime || "无"}`
+      );
+    } else {
+      alert(`成功同步 ${result.activities.length} 条活动`);
+    }
   } catch (error) {
     console.error(error);
     alert("活动同步失败，请检查后端接口或返回数据格式。");
