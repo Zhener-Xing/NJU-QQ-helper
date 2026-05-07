@@ -266,8 +266,8 @@ async def poll_message_loop() -> None:
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             try:
-                payload = {"group_id": int(TARGET_GROUP_ID), "count": NAPCAT_POLL_LIMIT}
-                async with session.post(url, json=payload) as resp:
+                params = {"group_id": int(TARGET_GROUP_ID), "count": NAPCAT_POLL_LIMIT}
+                async with session.get(url, params=params) as resp:
                     if resp.status != 200:
                         text = await resp.text()
                         print(f"❌ NapCat HTTP异常 {resp.status}: {text[:200]}")
