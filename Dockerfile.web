@@ -2,7 +2,7 @@ FROM node:20-alpine
 
 WORKDIR /app
 COPY package.json ./
-COPY index.html styles.css app.js server.js ./
+COPY index.html styles.css app.js server.js apple-touch-icon.png ./
 
 EXPOSE 8000
 CMD ["node", "server.js"]
