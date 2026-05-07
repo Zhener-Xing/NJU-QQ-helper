@@ -6,7 +6,7 @@ services:
     container_name: nju-qq-helper-web
     restart: unless-stopped
     ports:
-      - "${PORT:-8000}:3000"
+      - "${PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
 
