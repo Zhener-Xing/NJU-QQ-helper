@@ -28,6 +28,8 @@ services:
       - ./data:/app/data
     depends_on:
       - napcat
+    extra_hosts:
+    - "host.docker.internal:host-gateway" 
 
   napcat:
     image: mlikiowa/napcat-docker:latest
@@ -35,4 +37,5 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
+      - /root/napcat/config:/app/.config/QQ    volumes:
       - /root/napcat/config:/app/.config/QQ
