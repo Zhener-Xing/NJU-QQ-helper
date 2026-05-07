@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r re
 COPY napcat_ai_bridge.py ./
 
 EXPOSE 4000
-CMD ["python", "napcat_ai_bridge.py"]
+CMD ["python","-u", "napcat_ai_bridge.py"]
