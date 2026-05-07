@@ -217,7 +217,14 @@ async function backfillFromRecentMessages() {
   }
 
   const uniqueExtracted = mergeActivities([], extracted);
-  if (uniqueExtracted.length === 0) return { activities: [], touched: false };
+  if (uniqueExtracted.length === 0) {
+    return {
+      activities: [],
+      touched: false,
+      scannedMessages: dedupMessages.length,
+      extractedItems: 0,
+    };
+  }
 
   const stored = readJsonArray(ACTIVITIES_FILE);
   const merged = mergeActivities(stored, uniqueExtracted);
@@ -229,11 +236,16 @@ async function handleApi(req, res) {
   ensureDataFile();
   let activities = readJsonArray(ACTIVITIES_FILE);
   let backfilled = false;
+  let debug = { scannedMessages: 0, extractedItems: 0 };
 
   if (activities.length === 0) {
     const result = await backfillFromRecentMessages();
     activities = result.activities;
     backfilled = result.touched;
+    debug = {
+      scannedMessages: result.scannedMessages || 0,
+      extractedItems: result.extractedItems || 0,
+    };
   }
 
   sendJson(res, 200, { activities, backfilled });
