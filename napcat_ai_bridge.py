@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import websockets
+import aiohttp
 from openai import AsyncOpenAI
 
 
@@ -15,12 +15,11 @@ DATA_DIR = ROOT / "data"
 ACTIVITIES_FILE = DATA_DIR / "activities.json"
 MESSAGE_LOG_FILE = DATA_DIR / "message_log.json"
 
-# client: bridge 主动连 NapCat（正向 WS）
-# server: bridge 监听端口，NapCat 反向连过来（反向 WS）
-BRIDGE_WS_MODE = os.getenv("BRIDGE_WS_MODE", "client").strip().lower()
-NAPCAT_WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:3001")
-BRIDGE_WS_HOST = os.getenv("BRIDGE_WS_HOST", "0.0.0.0").strip()
-BRIDGE_WS_PORT = int(os.getenv("BRIDGE_WS_PORT", "8765"))
+NAPCAT_HTTP_URL = os.getenv("NAPCAT_HTTP_URL", "http://host.docker.internal:3002").strip()
+NAPCAT_HISTORY_PATH = os.getenv("NAPCAT_HISTORY_PATH", "/get_group_msg_history").strip()
+NAPCAT_POLL_INTERVAL_SEC = float(os.getenv("NAPCAT_POLL_INTERVAL_SEC", "5"))
+NAPCAT_POLL_LIMIT = int(os.getenv("NAPCAT_POLL_LIMIT", "30"))
+
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "").strip()
 TARGET_USERS = {u.strip() for u in os.getenv("TARGET_USERS", "").split(",") if u.strip()}
 
@@ -60,6 +59,7 @@ if not TARGET_GROUP_ID:
 
 client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
 lock = asyncio.Lock()
+seen_message_ids: set[str] = set()
 
 
 def ensure_store() -> None:
@@ -152,6 +152,18 @@ def parse_json_array(text: str) -> list[dict[str, Any]]:
         return []
 
 
+def extract_messages(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
+    data = resp_json.get("data")
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        for key in ("messages", "message", "list"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    return []
+
+
 async def extract_activities(message: str) -> list[dict[str, Any]]:
     response = await client.chat.completions.create(
         model=AI_MODEL,
@@ -177,21 +189,16 @@ async def upsert_activities(items: list[dict[str, Any]]) -> None:
 
         merged = list(stored)
         for item in items:
-            fp = fingerprint(item)
-            idx = next((i for i, it in enumerate(merged) if fingerprint(it) == fp), -1)
+            idx = next((i for i, it in enumerate(merged) if fingerprint(it) == fingerprint(item)), -1)
             if idx == -1:
                 merged.append(item)
             elif changed(merged[idx], item):
                 merged[idx] = {**merged[idx], **item}
 
-        ACTIVITIES_FILE.write_text(
-            json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        ACTIVITIES_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def append_message_log(
-    *, message_id: str, group_id: str, user_id: str, raw_message: str
-) -> None:
+async def append_message_log(*, message_id: str, group_id: str, user_id: str, raw_message: str) -> None:
     async with lock:
         ensure_store()
         stored = json.loads(MESSAGE_LOG_FILE.read_text(encoding="utf-8"))
@@ -211,11 +218,7 @@ async def append_message_log(
                 "time": datetime.now().isoformat(),
             }
         )
-        # 只保留最近 14 天日志，避免无限增长
-        recent = stored[-5000:]
-        MESSAGE_LOG_FILE.write_text(
-            json.dumps(recent, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        MESSAGE_LOG_FILE.write_text(json.dumps(stored[-5000:], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 async def process_message(raw_message: str, group_id: str, user_id: str) -> None:
@@ -228,26 +231,21 @@ async def process_message(raw_message: str, group_id: str, user_id: str) -> None
         print(f"❌ 处理消息失败: {exc}")
 
 
-async def handle_napcat_payload(payload: str) -> None:
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return
-
-    if data.get("post_type") != "message" or data.get("message_type") != "group":
-        return
-
-    group_id = str(data.get("group_id", ""))
-    user_id = str(data.get("user_id", ""))
-    message_id = str(data.get("message_id", ""))
-    raw_message = str(data.get("raw_message", "")).strip()
-    if not raw_message:
-        return
-
-    if group_id != TARGET_GROUP_ID:
+async def handle_message(msg: dict[str, Any]) -> None:
+    group_id = str(msg.get("group_id", ""))
+    user_id = str(msg.get("user_id", ""))
+    message_id = str(msg.get("message_id", "") or msg.get("id", ""))
+    raw_message = str(msg.get("raw_message", "") or msg.get("message", "")).strip()
+    if not raw_message or group_id != TARGET_GROUP_ID:
         return
     if TARGET_USERS and user_id not in TARGET_USERS:
         return
+    if message_id and message_id in seen_message_ids:
+        return
+    if message_id:
+        seen_message_ids.add(message_id)
+        if len(seen_message_ids) > 10000:
+            seen_message_ids.clear()
 
     print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
     await append_message_log(
@@ -259,44 +257,30 @@ async def handle_napcat_payload(payload: str) -> None:
     asyncio.create_task(process_message(raw_message, group_id, user_id))
 
 
-async def client_message_loop() -> None:
-    while True:
-        try:
-            async with websockets.connect(NAPCAT_WS_URL) as ws:
-                print(f"🤖 已连接 NapCat（正向）: {NAPCAT_WS_URL}")
-                async for payload in ws:
-                    await handle_napcat_payload(payload)
-        except Exception as exc:
-            print(f"❌ NapCat 连接异常: {exc}，5秒后重连")
-            await asyncio.sleep(5)
-
-
-async def reverse_ws_handler(websocket: Any) -> None:
-    addr = getattr(websocket, "remote_address", None)
-    print(f"📎 NapCat 已连接（反向 WS）: {addr}")
-    try:
-        async for payload in websocket:
-            await handle_napcat_payload(payload)
-    finally:
-        print(f"📴 NapCat 断开: {addr}")
-
-
-async def server_message_loop() -> None:
-    async with websockets.serve(
-        reverse_ws_handler,
-        BRIDGE_WS_HOST,
-        BRIDGE_WS_PORT,
-    ):
-        print(
-            f"🛰️ 反向 WebSocket 已监听 ws://{BRIDGE_WS_HOST}:{BRIDGE_WS_PORT}/ "
-            f"（请在 NapCat 里把上报地址指到这里）"
-        )
-        await asyncio.Future()
+async def poll_message_loop() -> None:
+    base = NAPCAT_HTTP_URL.rstrip("/")
+    path = NAPCAT_HISTORY_PATH if NAPCAT_HISTORY_PATH.startswith("/") else f"/{NAPCAT_HISTORY_PATH}"
+    url = f"{base}{path}"
+    print(f"🔁 轮询 NapCat HTTP: {url}, interval={NAPCAT_POLL_INTERVAL_SEC}s")
+    timeout = aiohttp.ClientTimeout(total=12)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            try:
+                payload = {"group_id": int(TARGET_GROUP_ID), "count": NAPCAT_POLL_LIMIT}
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        print(f"❌ NapCat HTTP异常 {resp.status}: {text[:200]}")
+                    else:
+                        body = await resp.json(content_type=None)
+                        messages = extract_messages(body if isinstance(body, dict) else {})
+                        for msg in messages:
+                            await handle_message(msg)
+            except Exception as exc:
+                print(f"❌ 轮询失败: {exc}")
+            await asyncio.sleep(NAPCAT_POLL_INTERVAL_SEC)
 
 
 if __name__ == "__main__":
     ensure_store()
-    if BRIDGE_WS_MODE == "server":
-        asyncio.run(server_message_loop())
-    else:
-        asyncio.run(client_message_loop())
+    asyncio.run(poll_message_loop())
