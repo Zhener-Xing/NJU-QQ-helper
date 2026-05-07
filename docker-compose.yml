@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   web:
     build:
@@ -26,16 +24,5 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-    depends_on:
-      - napcat
     extra_hosts:
-      - "host.docker.internal:host-gateway" 
-
-  napcat:
-    image: mlikiowa/napcat-docker:latest
-    container_name: napcat
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - /root/napcat/config:/app/.config/QQ    volumes:
-      - /root/napcat/config:/app/.config/QQ
+      - "host.docker.internal:host-gateway"
