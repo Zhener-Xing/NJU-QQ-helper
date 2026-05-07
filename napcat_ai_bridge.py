@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 ACTIVITIES_FILE = DATA_DIR / "activities.json"
+MESSAGE_LOG_FILE = DATA_DIR / "message_log.json"
 
 NAPCAT_WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:3001")
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "").strip()
@@ -60,6 +61,8 @@ def ensure_store() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not ACTIVITIES_FILE.exists():
         ACTIVITIES_FILE.write_text("[]", encoding="utf-8")
+    if not MESSAGE_LOG_FILE.exists():
+        MESSAGE_LOG_FILE.write_text("[]", encoding="utf-8")
 
 
 def normalize_text(value: Any, fallback: str = "无") -> str:
@@ -181,6 +184,35 @@ async def upsert_activities(items: list[dict[str, Any]]) -> None:
         )
 
 
+async def append_message_log(
+    *, message_id: str, group_id: str, user_id: str, raw_message: str
+) -> None:
+    async with lock:
+        ensure_store()
+        stored = json.loads(MESSAGE_LOG_FILE.read_text(encoding="utf-8"))
+        if not isinstance(stored, list):
+            stored = []
+
+        existing = {str(x.get("message_id", "")) for x in stored}
+        if message_id and message_id in existing:
+            return
+
+        stored.append(
+            {
+                "message_id": message_id,
+                "group_id": group_id,
+                "user_id": user_id,
+                "raw_message": raw_message,
+                "time": datetime.now().isoformat(),
+            }
+        )
+        # 只保留最近 14 天日志，避免无限增长
+        recent = stored[-5000:]
+        MESSAGE_LOG_FILE.write_text(
+            json.dumps(recent, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+
 async def process_message(raw_message: str, group_id: str, user_id: str) -> None:
     try:
         items = await extract_activities(raw_message)
@@ -207,6 +239,7 @@ async def message_loop() -> None:
 
                     group_id = str(data.get("group_id", ""))
                     user_id = str(data.get("user_id", ""))
+                    message_id = str(data.get("message_id", ""))
                     raw_message = str(data.get("raw_message", "")).strip()
                     if not raw_message:
                         continue
@@ -217,6 +250,12 @@ async def message_loop() -> None:
                         continue
 
                     print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
+                    await append_message_log(
+                        message_id=message_id,
+                        group_id=group_id,
+                        user_id=user_id,
+                        raw_message=raw_message,
+                    )
                     asyncio.create_task(process_message(raw_message, group_id, user_id))
         except Exception as exc:
             print(f"❌ NapCat 连接异常: {exc}，5秒后重连")
