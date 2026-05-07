@@ -1,0 +1,10 @@
+{
+  "name": "nju-qq-helper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NJU QQ helper web app with server-side AI proxy",
+  "scripts": {
+    "start": "node server.js",
+    "start:web": "node server.js"
+  }
+}

@@ -1,0 +1,23 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: nju-qq-helper-web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:3000"
+    volumes:
+      - ./data:/app/data
+
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: nju-qq-helper-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    network_mode: host

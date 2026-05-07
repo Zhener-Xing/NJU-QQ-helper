@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NJU QQ helper</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>NJU QQ helper</h1>
+      <p>自动整理群聊活动：名称、概况、地点、报名链接、时间与DDL</p>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <h2>活动同步</h2>
+        <p class="hint">点击按钮从后端同步 AI 识别后的活动。</p>
+        <form id="ai-form">
+          <button type="submit">同步活动</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="toolbar">
+          <h2>活动列表</h2>
+          <div class="toolbar-actions">
+            <select id="category-filter" aria-label="活动分类筛选">
+              <option value="全部">全部</option>
+              <option value="五育">五育</option>
+              <option value="必做">必做</option>
+              <option value="休闲活动">休闲活动</option>
+            </select>
+            <button id="clear-expired-btn" class="secondary">清理过期</button>
+          </div>
+        </div>
+        <ul id="activity-list" class="activity-list"></ul>
+        <p id="empty-state" class="empty-state">当前筛选条件下暂无活动</p>
+      </section>
+    </main>
+
+    <template id="item-template">
+      <li class="activity-item">
+        <div class="item-main">
+          <p class="item-title"></p>
+          <p class="item-meta"></p>
+        </div>
+        <div class="item-actions">
+          <button class="secondary edit-btn">编辑</button>
+          <button class="danger delete-btn">删除</button>
+        </div>
+      </li>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
