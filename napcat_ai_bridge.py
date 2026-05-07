@@ -15,7 +15,12 @@ DATA_DIR = ROOT / "data"
 ACTIVITIES_FILE = DATA_DIR / "activities.json"
 MESSAGE_LOG_FILE = DATA_DIR / "message_log.json"
 
+# client: bridge 主动连 NapCat（正向 WS）
+# server: bridge 监听端口，NapCat 反向连过来（反向 WS）
+BRIDGE_WS_MODE = os.getenv("BRIDGE_WS_MODE", "client").strip().lower()
 NAPCAT_WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:3001")
+BRIDGE_WS_HOST = os.getenv("BRIDGE_WS_HOST", "0.0.0.0").strip()
+BRIDGE_WS_PORT = int(os.getenv("BRIDGE_WS_PORT", "8765"))
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "").strip()
 TARGET_USERS = {u.strip() for u in os.getenv("TARGET_USERS", "").split(",") if u.strip()}
 
@@ -223,45 +228,75 @@ async def process_message(raw_message: str, group_id: str, user_id: str) -> None
         print(f"❌ 处理消息失败: {exc}")
 
 
-async def message_loop() -> None:
+async def handle_napcat_payload(payload: str) -> None:
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return
+
+    if data.get("post_type") != "message" or data.get("message_type") != "group":
+        return
+
+    group_id = str(data.get("group_id", ""))
+    user_id = str(data.get("user_id", ""))
+    message_id = str(data.get("message_id", ""))
+    raw_message = str(data.get("raw_message", "")).strip()
+    if not raw_message:
+        return
+
+    if group_id != TARGET_GROUP_ID:
+        return
+    if TARGET_USERS and user_id not in TARGET_USERS:
+        return
+
+    print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
+    await append_message_log(
+        message_id=message_id,
+        group_id=group_id,
+        user_id=user_id,
+        raw_message=raw_message,
+    )
+    asyncio.create_task(process_message(raw_message, group_id, user_id))
+
+
+async def client_message_loop() -> None:
     while True:
         try:
             async with websockets.connect(NAPCAT_WS_URL) as ws:
-                print(f"🤖 已连接 NapCat: {NAPCAT_WS_URL}")
+                print(f"🤖 已连接 NapCat（正向）: {NAPCAT_WS_URL}")
                 async for payload in ws:
-                    try:
-                        data = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-
-                    if data.get("post_type") != "message" or data.get("message_type") != "group":
-                        continue
-
-                    group_id = str(data.get("group_id", ""))
-                    user_id = str(data.get("user_id", ""))
-                    message_id = str(data.get("message_id", ""))
-                    raw_message = str(data.get("raw_message", "")).strip()
-                    if not raw_message:
-                        continue
-
-                    if group_id != TARGET_GROUP_ID:
-                        continue
-                    if TARGET_USERS and user_id not in TARGET_USERS:
-                        continue
-
-                    print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
-                    await append_message_log(
-                        message_id=message_id,
-                        group_id=group_id,
-                        user_id=user_id,
-                        raw_message=raw_message,
-                    )
-                    asyncio.create_task(process_message(raw_message, group_id, user_id))
+                    await handle_napcat_payload(payload)
         except Exception as exc:
             print(f"❌ NapCat 连接异常: {exc}，5秒后重连")
             await asyncio.sleep(5)
 
 
+async def reverse_ws_handler(websocket: Any) -> None:
+    addr = getattr(websocket, "remote_address", None)
+    print(f"📎 NapCat 已连接（反向 WS）: {addr}")
+    try:
+        async for payload in websocket:
+            await handle_napcat_payload(payload)
+    finally:
+        print(f"📴 NapCat 断开: {addr}")
+
+
+async def server_message_loop() -> None:
+    async with websockets.serve(
+        reverse_ws_handler,
+        BRIDGE_WS_HOST,
+        BRIDGE_WS_PORT,
+    ):
+        print(
+            f"🛰️ 反向 WebSocket 已监听 ws://{BRIDGE_WS_HOST}:{BRIDGE_WS_PORT}/ "
+            f"（请在 NapCat 里把上报地址指到这里）"
+        )
+        await asyncio.Future()
+
+
 if __name__ == "__main__":
     ensure_store()
-    asyncio.run(message_loop())
+    if BRIDGE_WS_MODE == "server":
+        asyncio.run(server_message_loop())
+    else:
+        asyncio.run(client_message_loop())
