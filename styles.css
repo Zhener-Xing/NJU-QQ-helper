@@ -204,7 +204,24 @@ button.danger {
   color: #acb3bf;
   font-size: 13px;
   line-height: 1.6;
-  white-space: pre-line;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item-meta .meta-line {
+  margin: 0;
+  word-break: break-word;
+}
+
+.item-meta a {
+  color: #8ab4f8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.item-meta a:hover {
+  color: #b8d2ff;
 }
 
 .item-actions {
