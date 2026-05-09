@@ -59,7 +59,7 @@ function normalizeActivity(raw) {
   const summary = normalizeText(raw.summary || raw.description, "");
   const eventTime = normalizeDateTime(raw.eventTime);
   const ddl = normalizeDateTime(raw.ddl);
-  if (!name || !summary || (!eventTime && !ddl)) return null;
+  if (!name || !summary) return null;
 
   return {
     name,
@@ -204,7 +204,7 @@ function createActivityItem(activity, index) {
     });
 
     if (!edited) {
-      alert("保存失败：活动名称、活动概况必填，且 DDL 与活动时间至少填写一个。");
+      alert("保存失败：活动名称与活动概况必填。");
       return;
     }
 
