@@ -44,9 +44,11 @@ SYSTEM_PROMPT = os.getenv(
 ]
 规则：
 1) name、summary 必填；
-2) 信息中出现“五育”则分类为“五育”；
-3) 出现“讲座”“工坊”“分享”则分类为“休闲活动”；
-4) 其他分类为“必做”。
+2) eventTime、ddl 可不填：原文没有时间信息则二者均为空字符串；若存在绝对日期或「本周日」「明天」「下周五」等相对表述，请结合下面给出的参考日期换算成具体日期，输出格式：YYYY-MM-DD 或 YYYY-MM-DDTHH:MM 或 YYYY-MM-DD HH:MM；
+3) 能写入时间的仅在「可明确换算或可解析」时；含糊表述且无对照时不要编造日期，留空；
+4) 信息中出现“五育”则分类为“五育”；
+5) 出现“讲座”“工坊”“分享”则分类为“休闲活动”；
+6) 其他分类为“必做”。
 如果没有有效活动，返回空数组 []。""",
 ).strip()
 
@@ -75,17 +77,21 @@ def normalize_text(value: Any, fallback: str = "无") -> str:
 
 
 def normalize_datetime(value: Any) -> str:
-    raw = str(value or "").strip()
+    raw = str(value or "").strip().strip('"').strip("'")
     if not raw:
         return ""
-    try:
-        if "T" in raw:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        else:
-            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
-        return dt.isoformat()
-    except ValueError:
-        return ""
+    iso = raw.replace("Z", "+00:00")
+    for fn in (
+        lambda: datetime.fromisoformat(iso),
+        lambda: datetime.strptime(raw, "%Y-%m-%d %H:%M:%S"),
+        lambda: datetime.strptime(raw, "%Y-%m-%d %H:%M"),
+        lambda: datetime.strptime(raw, "%Y-%m-%d"),
+    ):
+        try:
+            return fn().isoformat()
+        except ValueError:
+            continue
+    return ""
 
 
 def detect_category(item: dict[str, Any]) -> str:
@@ -113,7 +119,7 @@ def normalize_activity(item: dict[str, Any]) -> dict[str, Any] | None:
     summary = normalize_text(item.get("summary") or item.get("description"), "")
     event_time = normalize_datetime(item.get("eventTime"))
     ddl = normalize_datetime(item.get("ddl"))
-    if not name or not summary or (not event_time and not ddl):
+    if not name or not summary:
         return None
     return {
         "name": name,
@@ -164,11 +170,15 @@ def extract_messages(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def extract_activities(message: str) -> list[dict[str, Any]]:
+    ref_day = datetime.now().date().isoformat()
+    user_content = (
+        f"参考日期（用于把「本周日」「明天」等相对说法换算为绝对日期）：{ref_day}\n\n消息全文：\n{message}"
+    )
     response = await client.chat.completions.create(
         model=AI_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message},
+            {"role": "user", "content": user_content},
         ],
         temperature=0.1,
     )
