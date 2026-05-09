@@ -102,6 +102,45 @@ function formatDateTime(value) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+/** 仅允许 http(s)，用于可点击报名链接；无法解析则返回 null */
+function toSafeHttpHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "无") return null;
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, "")}`;
+  try {
+    const u = new URL(candidate);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+function appendMetaLine(container, label, valueText) {
+  const line = document.createElement("p");
+  line.className = "meta-line";
+  line.appendChild(document.createTextNode(`${label}${valueText}`));
+  container.appendChild(line);
+}
+
+function appendSignupMetaLine(container, signupLink) {
+  const line = document.createElement("p");
+  line.className = "meta-line";
+  line.appendChild(document.createTextNode("报名链接："));
+  const href = toSafeHttpHref(signupLink);
+  if (href) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = signupLink.trim();
+    line.appendChild(a);
+  } else {
+    line.appendChild(document.createTextNode(signupLink));
+  }
+  container.appendChild(line);
+}
+
 function isExpired(activity, now = Date.now()) {
   const eventTime = activity.eventTime ? new Date(activity.eventTime).getTime() : null;
   const ddl = activity.ddl ? new Date(activity.ddl).getTime() : null;
@@ -127,11 +166,12 @@ function createActivityItem(activity, index) {
   const deleteBtn = node.querySelector(".delete-btn");
 
   titleEl.textContent = activity.name;
-  metaEl.textContent = `概况：${activity.summary}
-地点：${activity.location}
-报名链接：${activity.signupLink}
-活动时间：${formatDateTime(activity.eventTime)}
-DDL：${formatDateTime(activity.ddl)}`;
+  metaEl.replaceChildren();
+  appendMetaLine(metaEl, "概况：", activity.summary);
+  appendMetaLine(metaEl, "地点：", activity.location);
+  appendSignupMetaLine(metaEl, activity.signupLink);
+  appendMetaLine(metaEl, "活动时间：", formatDateTime(activity.eventTime));
+  appendMetaLine(metaEl, "DDL：", formatDateTime(activity.ddl));
 
   editBtn.addEventListener("click", () => {
     const nextName = prompt("活动名称（必填）", activity.name);
