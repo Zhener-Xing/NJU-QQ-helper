@@ -90,7 +90,7 @@ function normalizeActivity(raw) {
   const summary = normalizeText(raw.summary || raw.description, "");
   const eventTime = normalizeDateTime(raw.eventTime);
   const ddl = normalizeDateTime(raw.ddl);
-  if (!name || !summary || (!eventTime && !ddl)) return null;
+  if (!name || !summary) return null;
   return {
     name,
     summary,
@@ -161,11 +161,15 @@ async function extractActivitiesByAI(rawMessage) {
 ]
 规则：
 1) name、summary 必填；
-2) eventTime 和 ddl 至少一个有值；
-3) 信息中出现“五育”则分类为“五育”；
-4) 出现“讲座”“工坊”“分享”则分类为“休闲活动”；
-5) 其他分类为“必做”。
+2) eventTime、ddl 可不填：原文没有时间信息则二者均为空字符串；若存在绝对日期或「本周日」「明天」「下周五」等相对表述，请结合下面给出的参考日期换算成具体日期，输出格式：YYYY-MM-DD 或 YYYY-MM-DDTHH:MM 或 YYYY-MM-DD HH:MM；
+3) 能写入时间的仅在「可明确换算或可解析」时；含糊表述且无对照时不要编造日期，留空；
+4) 信息中出现“五育”则分类为“五育”；
+5) 出现“讲座”“工坊”“分享”则分类为“休闲活动”；
+6) 其他分类为“必做”。
 如果没有有效活动，返回空数组 []。`;
+
+  const refDay = new Date().toISOString().slice(0, 10);
+  const userContent = `参考日期（用于把「本周日」「明天」等相对说法换算为绝对日期）：${refDay}\n\n消息全文：\n${rawMessage}`;
 
   const resp = await fetch(`${AI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
@@ -178,7 +182,7 @@ async function extractActivitiesByAI(rawMessage) {
       temperature: 0.1,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: rawMessage },
+        { role: "user", content: userContent },
       ],
     }),
   });
