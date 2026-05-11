@@ -169,6 +169,42 @@ def extract_messages(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def cq_message_to_text(message: Any) -> str:
+    if message is None:
+        return ""
+    if isinstance(message, str):
+        return message.strip()
+    if isinstance(message, list):
+        parts: list[str] = []
+        for seg in message:
+            if not isinstance(seg, dict):
+                continue
+            if seg.get("type") == "text":
+                data = seg.get("data") or {}
+                t = str(data.get("text", "") or "")
+                if t:
+                    parts.append(t)
+        return "".join(parts).strip()
+    return str(message).strip()
+
+
+def normalize_incoming_message(msg: dict[str, Any]) -> dict[str, Any]:
+    """将 OneBot / NapCat 群消息字段对齐为 handle_message 使用的键。"""
+    sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
+    group_id = msg.get("group_id", msg.get("groupId", ""))
+    user_id = msg.get("user_id", msg.get("userId", sender.get("user_id", sender.get("userId", ""))))
+    message_id = msg.get("message_id", msg.get("messageId", msg.get("message_seq", msg.get("id", ""))))
+    raw = msg.get("raw_message", msg.get("rawMessage", ""))
+    if not str(raw or "").strip():
+        raw = cq_message_to_text(msg.get("message"))
+    return {
+        "group_id": str(group_id) if group_id != "" and group_id is not None else "",
+        "user_id": str(user_id) if user_id != "" and user_id is not None else "",
+        "message_id": str(message_id) if message_id != "" and message_id is not None else "",
+        "raw_message": str(raw or "").strip(),
+    }
+
+
 async def extract_activities(message: str) -> list[dict[str, Any]]:
     ref_day = datetime.now().date().isoformat()
     user_content = (
@@ -241,10 +277,11 @@ async def process_message(raw_message: str, group_id: str, user_id: str) -> None
 
 
 async def handle_message(msg: dict[str, Any]) -> None:
-    group_id = str(msg.get("group_id", ""))
-    user_id = str(msg.get("user_id", ""))
-    message_id = str(msg.get("message_id", "") or msg.get("id", ""))
-    raw_message = str(msg.get("raw_message", "") or msg.get("message", "")).strip()
+    norm = normalize_incoming_message(msg)
+    group_id = norm["group_id"]
+    user_id = norm["user_id"]
+    message_id = norm["message_id"]
+    raw_message = norm["raw_message"]
     if not raw_message or group_id != TARGET_GROUP_ID:
         return
     if TARGET_USERS and user_id not in TARGET_USERS:
@@ -272,19 +309,37 @@ async def poll_message_loop() -> None:
     url = f"{base}{path}"
     print(f"🔁 轮询 NapCat HTTP: {url}, interval={NAPCAT_POLL_INTERVAL_SEC}s")
     timeout = aiohttp.ClientTimeout(total=12)
+    payload = {
+        "group_id": TARGET_GROUP_ID,
+        "count": NAPCAT_POLL_LIMIT,
+        "reverse_order": False,
+        "disable_get_url": False,
+        "parse_mult_msg": True,
+        "quick_reply": False,
+        "reverseOrder": False,
+    }
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             try:
-                params = {"group_id": int(TARGET_GROUP_ID), "count": NAPCAT_POLL_LIMIT}
-                async with session.get(url, params=params) as resp:
+                async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
                         text = await resp.text()
                         print(f"❌ NapCat HTTP异常 {resp.status}: {text[:200]}")
                     else:
                         body = await resp.json(content_type=None)
-                        messages = extract_messages(body if isinstance(body, dict) else {})
-                        for msg in messages:
-                            await handle_message(msg)
+                        if not isinstance(body, dict):
+                            print(f"❌ NapCat 返回非 JSON 对象: {str(body)[:200]}")
+                        elif body.get("status") == "failed" or (
+                            isinstance(body.get("retcode"), int) and body.get("retcode") != 0
+                        ):
+                            print(
+                                f"❌ NapCat 业务失败 retcode={body.get('retcode')} "
+                                f"message={body.get('message') or body.get('wording') or ''}"
+                            )
+                        else:
+                            messages = extract_messages(body)
+                            for msg in messages:
+                                await handle_message(msg)
             except Exception as exc:
                 print(f"❌ 轮询失败: {exc}")
             await asyncio.sleep(NAPCAT_POLL_INTERVAL_SEC)
