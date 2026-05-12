@@ -21,6 +21,10 @@ function loadActivities() {
   }
 }
 
+function saveActivities(activities) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+}
+
 function loadFavoriteFingerprints() {
   try {
     const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
