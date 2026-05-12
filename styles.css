@@ -240,6 +240,11 @@ button.favorite-btn.favorite-on {
   font-weight: 600;
 }
 
+.activity-item-deleted {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
 .empty-state {
   margin: 12px 0 0;
   color: var(--muted);
