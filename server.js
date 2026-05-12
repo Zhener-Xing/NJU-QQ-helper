@@ -8,7 +8,7 @@ const AI_API_KEY = process.env.AI_API_KEY || "";
 const AI_BASE_URL = process.env.AI_BASE_URL || "https://api.deepseek.com/v1";
 const AI_MODEL = process.env.AI_MODEL || "deepseek-chat";
 const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS || 5);
-const MIN_ACTIVITY_TEXT_LEN = 50;
+const MIN_RAW_MESSAGE_LEN = 50;
 const BACKFILL_MAX_MESSAGES = Number(process.env.BACKFILL_MAX_MESSAGES || 80);
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
@@ -117,7 +117,6 @@ function normalizeActivity(raw) {
   const eventTime = normalizeDateTime(raw.eventTime);
   const ddl = normalizeDateTime(raw.ddl);
   if (!name || !summary) return null;
-  if (name.trim().length + summary.trim().length < MIN_ACTIVITY_TEXT_LEN) return null;
   return {
     name,
     summary,
@@ -188,13 +187,18 @@ async function extractActivitiesByAI(rawMessage) {
 ]
 规则：
 1) name、summary 必填：summary 须为能看出活动主题与内容的简单介绍（一两句话），不得仅用「无」或两三个词敷衍；
-2) 「活动名称 + 活动概况」去掉首尾空白后合计须不少于 50 个字符；不足则视为信息过于简短，不要输出该条；
+2) 本条群消息「消息全文」去掉首尾空白后若少于 50 个字符，视为原文过短，不要输出任何活动（必须返回 []）；本条消息即用户给出的整段「消息全文」，勿与其他消息合并判断；
 3) eventTime、ddl 可不填：原文没有时间信息则二者均为空字符串；若存在绝对日期或「本周日」「明天」「下周五」等相对表述，请结合下面给出的参考日期换算成具体日期，输出格式：YYYY-MM-DD 或 YYYY-MM-DDTHH:MM 或 YYYY-MM-DD HH:MM；
 4) 能写入时间的仅在「可明确换算或可解析」时；含糊表述且无对照时不要编造日期，留空；
 5) 信息中出现「五育」或「智育」「德育」「体育」「美育」「劳育」任一则分类为「五育」；
 6) 出现「讲座」「工坊」「分享」则分类为「休闲活动」；
 7) 其他分类为「必做」。
 如果没有有效活动，返回空数组 []。`;
+
+  const raw = String(rawMessage || "").trim();
+  if (raw.length < MIN_RAW_MESSAGE_LEN) {
+    return [];
+  }
 
   const refDay = new Date().toISOString().slice(0, 10);
   const userContent = `参考日期（用于把「本周日」「明天」等相对说法换算为绝对日期）：${refDay}\n\n消息全文：\n${rawMessage}`;
