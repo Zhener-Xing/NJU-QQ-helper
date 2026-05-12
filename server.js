@@ -24,9 +24,34 @@ const MIME_TYPES = {
   ".ico": "image/x-icon",
 };
 
+/** 浏览器从其他端口（如 Live Preview）访问 API 时需要 CORS + OPTIONS 预检 */
+function apiCorsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+}
+
 function sendJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    ...apiCorsHeaders(),
+  });
   res.end(JSON.stringify(payload));
+}
+
+function getPathname(reqUrl) {
+  try {
+    const pathname = new URL(reqUrl, "http://127.0.0.1").pathname;
+    return pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  } catch {
+    return "";
+  }
+}
+
+function isExtractApiPath(pathname) {
+  return pathname === "/api/activities/extract";
 }
 
 function ensureDataFile() {
@@ -247,15 +272,15 @@ async function handleApi(req, res) {
 
   if (activities.length === 0) {
     const result = await backfillFromRecentMessages();
-    activities = result.activities;
-    backfilled = result.touched;
+    activities = Array.isArray(result.activities) ? result.activities : [];
+    backfilled = Boolean(result.touched);
     debug = {
       scannedMessages: result.scannedMessages || 0,
       extractedItems: result.extractedItems || 0,
     };
   }
 
-  sendJson(res, 200, { activities, backfilled });
+  sendJson(res, 200, { activities, backfilled, debug });
 }
 
 function handleStatic(req, res) {
@@ -284,7 +309,15 @@ function handleStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === "POST" && req.url === "/api/activities/extract") {
+    const pathname = getPathname(req.url || "/");
+
+    if (req.method === "OPTIONS" && isExtractApiPath(pathname)) {
+      res.writeHead(204, apiCorsHeaders());
+      res.end();
+      return;
+    }
+
+    if (req.method === "POST" && isExtractApiPath(pathname)) {
       await handleApi(req, res);
       return;
     }
