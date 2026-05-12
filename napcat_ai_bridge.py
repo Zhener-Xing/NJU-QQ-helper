@@ -1,355 +1,253 @@
-import asyncio
-import json
-import os
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import Any
+* {
+  box-sizing: border-box;
+}
 
-import aiohttp
-from openai import AsyncOpenAI
+:root {
+  --bg: #0f1116;
+  --panel: #181b22;
+  --panel-soft: #1d2129;
+  --line: rgba(255, 255, 255, 0.1);
+  --text: #e7eaf0;
+  --muted: #adb4c0;
+}
 
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  background: linear-gradient(180deg, #14171d, var(--bg));
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
 
-ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-ACTIVITIES_FILE = DATA_DIR / "activities.json"
-MESSAGE_LOG_FILE = DATA_DIR / "message_log.json"
+.page-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 18px 16px 14px;
+  background: rgba(15, 17, 22, 0.95);
+  color: #f3f4f6;
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+  width: min(100%, 430px);
+}
 
-NAPCAT_HTTP_URL = os.getenv("NAPCAT_HTTP_URL", "http://host.docker.internal:3002").strip()
-NAPCAT_HISTORY_PATH = os.getenv("NAPCAT_HISTORY_PATH", "/get_group_msg_history").strip()
-NAPCAT_POLL_INTERVAL_SEC = float(os.getenv("NAPCAT_POLL_INTERVAL_SEC", "5"))
-NAPCAT_POLL_LIMIT = int(os.getenv("NAPCAT_POLL_LIMIT", "30"))
+.page-header h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+  font-weight: 650;
+}
 
-TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "").strip()
-TARGET_USERS = {u.strip() for u in os.getenv("TARGET_USERS", "").split(",") if u.strip()}
+.page-header p {
+  margin: 0;
+  opacity: 0.78;
+  color: #c3c7d0;
+}
 
-AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1").strip()
-AI_MODEL = os.getenv("AI_MODEL", "deepseek-chat").strip()
+.container {
+  width: min(100%, 430px);
+  margin: 0;
+  padding: 14px 14px 26px;
+  display: grid;
+  gap: 12px;
+}
 
-MIN_ACTIVITY_TEXT_LEN = 50
+.panel {
+  background: linear-gradient(180deg, var(--panel-soft), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
 
-SYSTEM_PROMPT = os.getenv(
-    "SYSTEM_PROMPT",
-    """你是QQ群活动提取助手。请从消息中提取活动信息并只返回 JSON 数组，不要解释。
-每个对象格式：
-[
-  {
-    "name": "活动名称",
-    "summary": "活动概况",
-    "location": "活动地点，没有填无",
-    "signupLink": "报名链接，没有填无",
-    "category": "五育|必做|休闲活动",
-    "eventTime": "ISO时间或空字符串",
-    "ddl": "ISO时间或空字符串"
-  }
-]
-规则：
-1) name、summary 必填：summary 须为能看出活动主题与内容的简单介绍（一两句话），不得仅用「无」或两三个词敷衍；
-2) 「活动名称 + 活动概况」去掉首尾空白后合计须不少于 50 个字符；不足则视为信息过于简短，不要输出该条；
-3) eventTime、ddl 可不填：原文没有时间信息则二者均为空字符串；若存在绝对日期或「本周日」「明天」「下周五」等相对表述，请结合下面给出的参考日期换算成具体日期，输出格式：YYYY-MM-DD 或 YYYY-MM-DDTHH:MM 或 YYYY-MM-DD HH:MM；
-4) 能写入时间的仅在「可明确换算或可解析」时；含糊表述且无对照时不要编造日期，留空；
-5) 信息中出现「五育」或「智育」「德育」「体育」「美育」「劳育」任一则分类为「五育」；
-6) 出现「讲座」「工坊」「分享」则分类为「休闲活动」；
-7) 其他分类为「必做」。
-如果没有有效活动，返回空数组 []。""",
-).strip()
+h2 {
+  margin-top: 0;
+  margin-bottom: 6px;
+  color: #eef1f6;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+  font-size: 17px;
+}
 
-if not AI_API_KEY:
-    raise RuntimeError("AI_API_KEY 未配置，请在环境变量中设置。")
-if not TARGET_GROUP_ID:
-    raise RuntimeError("TARGET_GROUP_ID 未配置，请在环境变量中设置。")
+.hint {
+  color: #a8aeb9;
+  margin: 0 0 4px;
+  font-size: 13px;
+}
 
+form {
+  display: grid;
+  gap: 12px;
+}
 
-client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
-lock = asyncio.Lock()
-seen_message_ids: set[str] = set()
+label {
+  display: block;
+  font-weight: 560;
+  color: #cfd4dd;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
 
+textarea,
+input,
+select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 14px;
+  background: rgba(18, 20, 26, 0.65);
+  color: #e9ecf2;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
 
-def ensure_store() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not ACTIVITIES_FILE.exists():
-        ACTIVITIES_FILE.write_text("[]", encoding="utf-8")
-    if not MESSAGE_LOG_FILE.exists():
-        MESSAGE_LOG_FILE.write_text("[]", encoding="utf-8")
+textarea::placeholder,
+input::placeholder {
+  color: #8f96a4;
+}
 
+textarea:focus,
+input:focus,
+select:focus {
+  outline: none;
+  border-color: rgba(214, 219, 228, 0.65);
+  box-shadow: 0 0 0 3px rgba(214, 219, 228, 0.12);
+  background: rgba(16, 18, 24, 0.85);
+}
 
-def normalize_text(value: Any, fallback: str = "无") -> str:
-    text = str(value or "").strip()
-    return text if text else fallback
+button {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(180deg, #d3d7df, #a8aeb9);
+  color: #171a1f;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.14s ease, filter 0.2s ease, box-shadow 0.2s ease;
+}
 
+button:hover {
+  filter: brightness(1.02);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
 
-def normalize_datetime(value: Any) -> str:
-    raw = str(value or "").strip().strip('"').strip("'")
-    if not raw:
-        return ""
-    iso = raw.replace("Z", "+00:00")
-    for fn in (
-        lambda: datetime.fromisoformat(iso),
-        lambda: datetime.strptime(raw, "%Y-%m-%d %H:%M:%S"),
-        lambda: datetime.strptime(raw, "%Y-%m-%d %H:%M"),
-        lambda: datetime.strptime(raw, "%Y-%m-%d"),
-    ):
-        try:
-            return fn().isoformat()
-        except ValueError:
-            continue
-    return ""
+button.secondary {
+  background: linear-gradient(180deg, #bbc1cc, #9098a6);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #171a1f;
+}
 
+button.danger {
+  background: linear-gradient(180deg, #8b909a, #6f7682);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #f1f3f7;
+}
 
-def detect_category(item: dict[str, Any]) -> str:
-    direct = str(item.get("category", "")).strip()
-    pool = " ".join(
-        [
-            str(item.get("name", "")),
-            str(item.get("summary", "")),
-            str(item.get("location", "")),
-            str(item.get("sourceText", "")),
-            direct,
-        ]
-    )
-    if "五育" in pool or re.search(r"智育|德育|体育|美育|劳育", pool):
-        return "五育"
-    if re.search(r"讲座|工坊|分享", pool):
-        return "休闲活动"
-    if direct in {"五育", "必做", "休闲活动"}:
-        return direct
-    return "必做"
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
 
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
 
-def normalize_activity(item: dict[str, Any]) -> dict[str, Any] | None:
-    name = normalize_text(item.get("name") or item.get("title"), "")
-    summary = normalize_text(item.get("summary") or item.get("description"), "")
-    event_time = normalize_datetime(item.get("eventTime"))
-    ddl = normalize_datetime(item.get("ddl"))
-    if not name or not summary:
-        return None
-    if len(name.strip()) + len(summary.strip()) < MIN_ACTIVITY_TEXT_LEN:
-        return None
-    return {
-        "name": name,
-        "summary": summary,
-        "location": normalize_text(item.get("location")),
-        "signupLink": normalize_text(item.get("signupLink")),
-        "category": detect_category(item),
-        "eventTime": event_time,
-        "ddl": ddl,
-    }
+.toolbar-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
 
+.toolbar-actions select {
+  min-width: 0;
+}
 
-def fingerprint(item: dict[str, Any]) -> str:
-    return normalize_text(item.get("name"), "").replace(" ", "").lower()
+.activity-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
 
+.activity-item {
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(22, 25, 31, 0.9), rgba(17, 20, 26, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
 
-def changed(old: dict[str, Any], new: dict[str, Any]) -> bool:
-    keys = ("summary", "location", "signupLink", "category", "eventTime", "ddl")
-    return any(old.get(k) != new.get(k) for k in keys)
+.item-title {
+  margin: 0 0 6px;
+  font-weight: 700;
+  color: #f0f3f8;
+}
 
+.item-meta {
+  margin: 0;
+  color: #acb3bf;
+  font-size: 13px;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 
-def parse_json_array(text: str) -> list[dict[str, Any]]:
-    raw = text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        raw = raw.replace("json", "", 1).strip()
-    start = raw.find("[")
-    end = raw.rfind("]")
-    if start == -1 or end == -1 or end <= start:
-        return []
-    try:
-        data = json.loads(raw[start : end + 1])
-        return data if isinstance(data, list) else []
-    except json.JSONDecodeError:
-        return []
+.item-meta .meta-line {
+  margin: 0;
+  word-break: break-word;
+}
 
+.item-meta a {
+  color: #8ab4f8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
-def extract_messages(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
-    data = resp_json.get("data")
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    if isinstance(data, dict):
-        for key in ("messages", "message", "list"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [x for x in value if isinstance(x, dict)]
-    return []
+.item-meta a:hover {
+  color: #b8d2ff;
+}
 
+.item-actions {
+  display: flex;
+  gap: 8px;
+}
 
-def cq_message_to_text(message: Any) -> str:
-    if message is None:
-        return ""
-    if isinstance(message, str):
-        return message.strip()
-    if isinstance(message, list):
-        parts: list[str] = []
-        for seg in message:
-            if not isinstance(seg, dict):
-                continue
-            if seg.get("type") == "text":
-                data = seg.get("data") or {}
-                t = str(data.get("text", "") or "")
-                if t:
-                    parts.append(t)
-        return "".join(parts).strip()
-    return str(message).strip()
+.item-actions button {
+  flex: 1;
+}
 
+button.favorite-btn.favorite-on {
+  background: linear-gradient(180deg, #d4a84b, #b8892e);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #1a1410;
+  font-weight: 600;
+}
 
-def normalize_incoming_message(msg: dict[str, Any]) -> dict[str, Any]:
-    """将 OneBot / NapCat 群消息字段对齐为 handle_message 使用的键。"""
-    sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
-    group_id = msg.get("group_id", msg.get("groupId", ""))
-    user_id = msg.get("user_id", msg.get("userId", sender.get("user_id", sender.get("userId", ""))))
-    message_id = msg.get("message_id", msg.get("messageId", msg.get("message_seq", msg.get("id", ""))))
-    raw = msg.get("raw_message", msg.get("rawMessage", ""))
-    if not str(raw or "").strip():
-        raw = cq_message_to_text(msg.get("message"))
-    return {
-        "group_id": str(group_id) if group_id != "" and group_id is not None else "",
-        "user_id": str(user_id) if user_id != "" and user_id is not None else "",
-        "message_id": str(message_id) if message_id != "" and message_id is not None else "",
-        "raw_message": str(raw or "").strip(),
-    }
+.activity-item-deleted {
+  opacity: 0.6;
+  border-style: dashed;
+}
 
-
-async def extract_activities(message: str) -> list[dict[str, Any]]:
-    ref_day = datetime.now().date().isoformat()
-    user_content = (
-        f"参考日期（用于把「本周日」「明天」等相对说法换算为绝对日期）：{ref_day}\n\n消息全文：\n{message}"
-    )
-    response = await client.chat.completions.create(
-        model=AI_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0.1,
-    )
-    content = response.choices[0].message.content or "[]"
-    raw_items = parse_json_array(content)
-    return [item for item in (normalize_activity(x) for x in raw_items) if item is not None]
-
-
-async def upsert_activities(items: list[dict[str, Any]]) -> None:
-    if not items:
-        return
-    async with lock:
-        ensure_store()
-        stored = json.loads(ACTIVITIES_FILE.read_text(encoding="utf-8"))
-        if not isinstance(stored, list):
-            stored = []
-
-        merged = list(stored)
-        for item in items:
-            idx = next((i for i, it in enumerate(merged) if fingerprint(it) == fingerprint(item)), -1)
-            if idx == -1:
-                merged.append(item)
-            elif changed(merged[idx], item):
-                merged[idx] = {**merged[idx], **item}
-
-        ACTIVITIES_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-async def append_message_log(*, message_id: str, group_id: str, user_id: str, raw_message: str) -> None:
-    async with lock:
-        ensure_store()
-        stored = json.loads(MESSAGE_LOG_FILE.read_text(encoding="utf-8"))
-        if not isinstance(stored, list):
-            stored = []
-
-        existing = {str(x.get("message_id", "")) for x in stored}
-        if message_id and message_id in existing:
-            return
-
-        stored.append(
-            {
-                "message_id": message_id,
-                "group_id": group_id,
-                "user_id": user_id,
-                "raw_message": raw_message,
-                "time": datetime.now().isoformat(),
-            }
-        )
-        MESSAGE_LOG_FILE.write_text(json.dumps(stored[-5000:], ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-async def process_message(raw_message: str, group_id: str, user_id: str) -> None:
-    try:
-        items = await extract_activities(raw_message)
-        await upsert_activities(items)
-        if items:
-            print(f"✅ 已写入/更新 {len(items)} 条活动，group={group_id}, user={user_id}")
-    except Exception as exc:
-        print(f"❌ 处理消息失败: {exc}")
-
-
-async def handle_message(msg: dict[str, Any]) -> None:
-    norm = normalize_incoming_message(msg)
-    group_id = norm["group_id"]
-    user_id = norm["user_id"]
-    message_id = norm["message_id"]
-    raw_message = norm["raw_message"]
-    if not raw_message or group_id != TARGET_GROUP_ID:
-        return
-    if TARGET_USERS and user_id not in TARGET_USERS:
-        return
-    if message_id and message_id in seen_message_ids:
-        return
-    if message_id:
-        seen_message_ids.add(message_id)
-        if len(seen_message_ids) > 10000:
-            seen_message_ids.clear()
-
-    print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
-    await append_message_log(
-        message_id=message_id,
-        group_id=group_id,
-        user_id=user_id,
-        raw_message=raw_message,
-    )
-    asyncio.create_task(process_message(raw_message, group_id, user_id))
-
-
-async def poll_message_loop() -> None:
-    base = NAPCAT_HTTP_URL.rstrip("/")
-    path = NAPCAT_HISTORY_PATH if NAPCAT_HISTORY_PATH.startswith("/") else f"/{NAPCAT_HISTORY_PATH}"
-    url = f"{base}{path}"
-    print(f"🔁 轮询 NapCat HTTP: {url}, interval={NAPCAT_POLL_INTERVAL_SEC}s")
-    timeout = aiohttp.ClientTimeout(total=12)
-    payload = {
-        "group_id": TARGET_GROUP_ID,
-        "count": NAPCAT_POLL_LIMIT,
-        "reverse_order": False,
-        "disable_get_url": False,
-        "parse_mult_msg": True,
-        "quick_reply": False,
-        "reverseOrder": False,
-    }
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        while True:
-            try:
-                async with session.post(url, json=payload) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        print(f"❌ NapCat HTTP异常 {resp.status}: {text[:200]}")
-                    else:
-                        body = await resp.json(content_type=None)
-                        if not isinstance(body, dict):
-                            print(f"❌ NapCat 返回非 JSON 对象: {str(body)[:200]}")
-                        elif body.get("status") == "failed" or (
-                            isinstance(body.get("retcode"), int) and body.get("retcode") != 0
-                        ):
-                            print(
-                                f"❌ NapCat 业务失败 retcode={body.get('retcode')} "
-                                f"message={body.get('message') or body.get('wording') or ''}"
-                            )
-                        else:
-                            messages = extract_messages(body)
-                            for msg in messages:
-                                await handle_message(msg)
-            except Exception as exc:
-                print(f"❌ 轮询失败: {exc}")
-            await asyncio.sleep(NAPCAT_POLL_INTERVAL_SEC)
-
-
-if __name__ == "__main__":
-    ensure_store()
-    asyncio.run(poll_message_loop())
+.empty-state {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
