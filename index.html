@@ -32,6 +32,7 @@
               <option value="五育">五育</option>
               <option value="必做">必做</option>
               <option value="休闲活动">休闲活动</option>
+              <option value="已删除">已删除</option>
             </select>
             <button id="clear-expired-btn" class="secondary">清理过期</button>
           </div>
@@ -50,7 +51,20 @@
         <div class="item-actions">
           <button type="button" class="secondary favorite-btn">收藏</button>
           <button class="secondary edit-btn">编辑</button>
-          <button class="danger delete-btn">删除</button>
+          <button type="button" class="secondary soft-delete-btn">删除</button>
+        </div>
+      </li>
+    </template>
+
+    <template id="deleted-item-template">
+      <li class="activity-item activity-item-deleted">
+        <div class="item-main">
+          <p class="item-title"></p>
+          <div class="item-meta"></div>
+        </div>
+        <div class="item-actions">
+          <button type="button" class="secondary restore-btn">恢复</button>
+          <button type="button" class="danger purge-btn">删除</button>
         </div>
       </li>
     </template>
