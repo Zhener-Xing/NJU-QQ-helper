@@ -79,6 +79,7 @@ function detectCategoryByContent(item) {
 }
 
 function normalizeActivity(raw) {
+  if (!raw || typeof raw !== "object") return null;
   const name = normalizeText(raw.name || raw.title, "");
   const summary = normalizeText(raw.summary || raw.description, "");
   const eventTime = normalizeDateTime(raw.eventTime);
@@ -321,20 +322,29 @@ function addActivities(items) {
 }
 
 async function requestAI() {
-  // TODO: 将 URL 换成你自己的后端接口
   const response = await fetch("/api/activities/extract", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
 
-  if (!response.ok) {
-    throw new Error(`AI 接口请求失败: ${response.status}`);
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(
+      `接口返回不是 JSON（HTTP ${response.status}）。请用「npm start」或 Docker 里的 web 服务地址打开页面（例如 http://localhost:8000），不要直接用浏览器打开本地 index.html 文件。响应开头：${text.slice(0, 120)}`
+    );
   }
 
-  const data = await response.json();
+  if (!response.ok) {
+    const detail = [data.error, data.detail].filter(Boolean).join(" — ");
+    throw new Error(detail || `请求失败 HTTP ${response.status}`);
+  }
+
   if (!Array.isArray(data.activities)) {
-    throw new Error("AI 返回格式错误，缺少 activities 数组");
+    throw new Error("返回 JSON 中缺少 activities 数组，请确认请求的是本项目的 node 服务 /api/activities/extract");
   }
   return data;
 }
@@ -365,7 +375,7 @@ aiForm.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     console.error(error);
-    alert("活动同步失败，请检查后端接口或返回数据格式。");
+    alert(`活动同步失败：${error.message || String(error)}`);
   } finally {
     button.disabled = false;
     button.textContent = originalText;
