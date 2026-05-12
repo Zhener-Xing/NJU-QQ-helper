@@ -1,6 +1,7 @@
 const STORAGE_KEY = "qq-helper-activities";
 const FAVORITES_STORAGE_KEY = "qq-helper-favorite-fingerprints";
-const MIN_ACTIVITY_TEXT_LEN = 50;
+const DELETED_STORAGE_KEY = "qq-helper-deleted-activities";
+const PERMANENT_REMOVED_KEY = "qq-helper-permanently-removed-fingerprints";
 const CATEGORY_LIST = ["五育", "必做", "休闲活动"];
 
 const aiForm = document.getElementById("ai-form");
@@ -9,6 +10,7 @@ const categoryFilter = document.getElementById("category-filter");
 const activityList = document.getElementById("activity-list");
 const emptyState = document.getElementById("empty-state");
 const itemTemplate = document.getElementById("item-template");
+const deletedItemTemplate = document.getElementById("deleted-item-template");
 let activeCategory = "全部";
 
 function loadActivities() {
@@ -39,6 +41,50 @@ function loadFavoriteFingerprints() {
 
 function saveFavoriteFingerprints(set) {
   localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...set]));
+}
+
+function loadDeletedActivities() {
+  try {
+    const raw = localStorage.getItem(DELETED_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.map(normalizeActivity).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function saveDeletedActivities(list) {
+  localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(list));
+}
+
+function loadPermanentRemovedFingerprints() {
+  try {
+    const raw = localStorage.getItem(PERMANENT_REMOVED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function savePermanentRemovedFingerprints(set) {
+  localStorage.setItem(PERMANENT_REMOVED_KEY, JSON.stringify([...set]));
+}
+
+function moveToSoftDeleted(activity) {
+  const list = loadDeletedActivities();
+  const fp = getActivityFingerprint(activity);
+  const without = list.filter((a) => getActivityFingerprint(a) !== fp);
+  without.unshift({ ...activity });
+  saveDeletedActivities(without);
+}
+
+function syncSkipFingerprints() {
+  const permanent = loadPermanentRemovedFingerprints();
+  const soft = loadDeletedActivities().map(getActivityFingerprint);
+  return new Set([...permanent, ...soft]);
 }
 
 function toggleFavoriteFingerprint(fp) {
@@ -89,7 +135,6 @@ function normalizeActivity(raw) {
   const eventTime = normalizeDateTime(raw.eventTime);
   const ddl = normalizeDateTime(raw.ddl);
   if (!name || !summary) return null;
-  if (name.trim().length + summary.trim().length < MIN_ACTIVITY_TEXT_LEN) return null;
 
   return {
     name,
@@ -171,6 +216,15 @@ function appendSignupMetaLine(container, signupLink) {
   container.appendChild(line);
 }
 
+function fillActivityMeta(metaEl, activity) {
+  metaEl.replaceChildren();
+  appendMetaLine(metaEl, "概况：", activity.summary);
+  appendMetaLine(metaEl, "地点：", activity.location);
+  appendSignupMetaLine(metaEl, activity.signupLink);
+  appendMetaLine(metaEl, "活动时间：", formatDateTime(activity.eventTime));
+  appendMetaLine(metaEl, "DDL：", formatDateTime(activity.ddl));
+}
+
 function isExpired(activity, now = Date.now()) {
   const eventTime = activity.eventTime ? new Date(activity.eventTime).getTime() : null;
   const ddl = activity.ddl ? new Date(activity.ddl).getTime() : null;
@@ -194,18 +248,13 @@ function createActivityItem(activity, index, favoriteSet) {
   const metaEl = node.querySelector(".item-meta");
   const favoriteBtn = node.querySelector(".favorite-btn");
   const editBtn = node.querySelector(".edit-btn");
-  const deleteBtn = node.querySelector(".delete-btn");
+  const softDeleteBtn = node.querySelector(".soft-delete-btn");
 
   const fp = getActivityFingerprint(activity);
   const favorited = favoriteSet.has(fp);
 
   titleEl.textContent = activity.name;
-  metaEl.replaceChildren();
-  appendMetaLine(metaEl, "概况：", activity.summary);
-  appendMetaLine(metaEl, "地点：", activity.location);
-  appendSignupMetaLine(metaEl, activity.signupLink);
-  appendMetaLine(metaEl, "活动时间：", formatDateTime(activity.eventTime));
-  appendMetaLine(metaEl, "DDL：", formatDateTime(activity.ddl));
+  fillActivityMeta(metaEl, activity);
 
   favoriteBtn.textContent = favorited ? "已收藏" : "收藏";
   favoriteBtn.classList.toggle("favorite-on", favorited);
@@ -249,7 +298,7 @@ function createActivityItem(activity, index, favoriteSet) {
     });
 
     if (!edited) {
-      alert(`保存失败：活动名称与概况必填，且名称与概况合计不少于 ${MIN_ACTIVITY_TEXT_LEN} 个字符。`);
+      alert("保存失败：活动名称与活动概况必填。");
       return;
     }
 
@@ -269,13 +318,14 @@ function createActivityItem(activity, index, favoriteSet) {
     cleanExpiredActivities();
   });
 
-  deleteBtn.addEventListener("click", () => {
+  softDeleteBtn.addEventListener("click", () => {
     const fpRemove = getActivityFingerprint(activity);
     const favs = loadFavoriteFingerprints();
     if (favs.has(fpRemove)) {
       favs.delete(fpRemove);
       saveFavoriteFingerprints(favs);
     }
+    moveToSoftDeleted(activity);
     const activities = loadActivities();
     activities.splice(index, 1);
     saveActivities(activities);
@@ -285,10 +335,77 @@ function createActivityItem(activity, index, favoriteSet) {
   return node;
 }
 
+function createDeletedActivityItem(activity) {
+  const node = deletedItemTemplate.content.cloneNode(true);
+  const titleEl = node.querySelector(".item-title");
+  const metaEl = node.querySelector(".item-meta");
+  const restoreBtn = node.querySelector(".restore-btn");
+  const purgeBtn = node.querySelector(".purge-btn");
+
+  titleEl.textContent = activity.name;
+  fillActivityMeta(metaEl, activity);
+
+  restoreBtn.addEventListener("click", () => {
+    const fp = getActivityFingerprint(activity);
+    const list = loadDeletedActivities();
+    const match = list.find((a) => getActivityFingerprint(a) === fp);
+    if (!match) return;
+    saveDeletedActivities(list.filter((a) => getActivityFingerprint(a) !== fp));
+
+    const main = loadActivities();
+    const idx = main.findIndex((a) => getActivityFingerprint(a) === fp);
+    if (idx === -1) {
+      main.push(match);
+    } else {
+      main[idx] = match;
+    }
+    saveActivities(main);
+    renderActivities();
+  });
+
+  purgeBtn.addEventListener("click", () => {
+    const fp = getActivityFingerprint(activity);
+    const list = loadDeletedActivities().filter((a) => getActivityFingerprint(a) !== fp);
+    saveDeletedActivities(list);
+
+    const perm = loadPermanentRemovedFingerprints();
+    perm.add(fp);
+    savePermanentRemovedFingerprints(perm);
+
+    const favs = loadFavoriteFingerprints();
+    if (favs.has(fp)) {
+      favs.delete(fp);
+      saveFavoriteFingerprints(favs);
+    }
+    renderActivities();
+  });
+
+  return node;
+}
+
+function updateToolbarForCategory() {
+  const hideClear = activeCategory === "我的收藏" || activeCategory === "已删除";
+  clearExpiredBtn.style.display = hideClear ? "none" : "";
+}
+
 function renderActivities() {
+  updateToolbarForCategory();
+  activityList.innerHTML = "";
+
+  if (activeCategory === "已删除") {
+    const deleted = loadDeletedActivities();
+    deleted.forEach((activity) => {
+      activityList.appendChild(createDeletedActivityItem(activity));
+    });
+    emptyState.style.display = deleted.length === 0 ? "block" : "none";
+    emptyState.textContent = "回收站为空";
+    return;
+  }
+
+  emptyState.textContent = "当前筛选条件下暂无活动";
+
   const activities = loadActivities();
   const favoriteSet = loadFavoriteFingerprints();
-  activityList.innerHTML = "";
   const filtered = activities.filter((activity) => {
     if (activeCategory === "我的收藏") {
       return favoriteSet.has(getActivityFingerprint(activity));
@@ -306,11 +423,14 @@ function renderActivities() {
 }
 
 function addActivities(items) {
+  const skipFp = syncSkipFingerprints();
   const current = loadActivities();
   const parsedItems = items.map(normalizeActivity).filter(Boolean);
   const merged = [...current];
 
   parsedItems.forEach((item) => {
+    const fp = getActivityFingerprint(item);
+    if (skipFp.has(fp)) return;
     const existingIndex = merged.findIndex((stored) => isSameActivity(stored, item));
     if (existingIndex === -1) {
       merged.push(item);
@@ -331,24 +451,12 @@ async function requestAI() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(
-      `接口返回不是 JSON（HTTP ${response.status}）。请用「npm start」或 Docker 里的 web 服务地址打开页面（例如 http://localhost:8000），不要直接用浏览器打开本地 index.html 文件。响应开头：${text.slice(0, 120)}`
-    );
-  }
-
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = [data.error, data.detail].filter(Boolean).join(" — ");
-    throw new Error(detail || `请求失败 HTTP ${response.status}`);
+    throw new Error(data.detail || data.error || `HTTP ${response.status}`);
   }
-
   if (!Array.isArray(data.activities)) {
-    throw new Error("返回 JSON 中缺少 activities 数组，请确认请求的是本项目的 node 服务 /api/activities/extract");
+    throw new Error("无效响应");
   }
   return data;
 }
@@ -364,22 +472,9 @@ aiForm.addEventListener("submit", async (event) => {
   try {
     const result = await requestAI();
     addActivities(result.activities);
-
-    if (result.activities.length === 0) {
-      const debug = result.debug || {};
-      alert(
-        `同步到 0 条活动。\n` +
-          `消息日志条数: ${debug.messageLogCount ?? 0}\n` +
-          `回溯扫描消息数: ${debug.scannedMessages ?? 0}\n` +
-          `AI密钥已配置: ${debug.hasApiKey ? "是" : "否"}\n` +
-          `最近消息时间: ${debug.lastMessageTime || "无"}`
-      );
-    } else {
-      alert(`成功同步 ${result.activities.length} 条活动`);
-    }
-  } catch (error) {
-    console.error(error);
-    alert(`活动同步失败：${error.message || String(error)}`);
+    alert(result.activities.length === 0 ? "同步完成。" : `已同步 ${result.activities.length} 条活动。`);
+  } catch {
+    alert("同步失败");
   } finally {
     button.disabled = false;
     button.textContent = originalText;
