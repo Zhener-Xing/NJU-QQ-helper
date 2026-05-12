@@ -1,4 +1,6 @@
 const STORAGE_KEY = "qq-helper-activities";
+const FAVORITES_STORAGE_KEY = "qq-helper-favorite-fingerprints";
+const MIN_ACTIVITY_TEXT_LEN = 50;
 const CATEGORY_LIST = ["五育", "必做", "休闲活动"];
 
 const aiForm = document.getElementById("ai-form");
@@ -19,8 +21,30 @@ function loadActivities() {
   }
 }
 
-function saveActivities(activities) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+function loadFavoriteFingerprints() {
+  try {
+    const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : []);
+  } catch (error) {
+    console.error("读取收藏失败:", error);
+    return new Set();
+  }
+}
+
+function saveFavoriteFingerprints(set) {
+  localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...set]));
+}
+
+function toggleFavoriteFingerprint(fp) {
+  const set = loadFavoriteFingerprints();
+  if (set.has(fp)) {
+    set.delete(fp);
+  } else {
+    set.add(fp);
+  }
+  saveFavoriteFingerprints(set);
 }
 
 function normalizeText(value, fallback = "无") {
@@ -48,7 +72,7 @@ function detectCategoryByContent(item) {
     .filter(Boolean)
     .join(" ");
 
-  if (textPool.includes("五育")) return "五育";
+  if (textPool.includes("五育") || /智育|德育|体育|美育|劳育/.test(textPool)) return "五育";
   if (/讲座|工坊|分享/.test(textPool)) return "休闲活动";
   if (CATEGORY_LIST.includes(directCategory)) return directCategory;
   return "必做";
@@ -60,6 +84,7 @@ function normalizeActivity(raw) {
   const eventTime = normalizeDateTime(raw.eventTime);
   const ddl = normalizeDateTime(raw.ddl);
   if (!name || !summary) return null;
+  if (name.trim().length + summary.trim().length < MIN_ACTIVITY_TEXT_LEN) return null;
 
   return {
     name,
@@ -158,12 +183,16 @@ function cleanExpiredActivities() {
   renderActivities();
 }
 
-function createActivityItem(activity, index) {
+function createActivityItem(activity, index, favoriteSet) {
   const node = itemTemplate.content.cloneNode(true);
   const titleEl = node.querySelector(".item-title");
   const metaEl = node.querySelector(".item-meta");
+  const favoriteBtn = node.querySelector(".favorite-btn");
   const editBtn = node.querySelector(".edit-btn");
   const deleteBtn = node.querySelector(".delete-btn");
+
+  const fp = getActivityFingerprint(activity);
+  const favorited = favoriteSet.has(fp);
 
   titleEl.textContent = activity.name;
   metaEl.replaceChildren();
@@ -172,6 +201,15 @@ function createActivityItem(activity, index) {
   appendSignupMetaLine(metaEl, activity.signupLink);
   appendMetaLine(metaEl, "活动时间：", formatDateTime(activity.eventTime));
   appendMetaLine(metaEl, "DDL：", formatDateTime(activity.ddl));
+
+  favoriteBtn.textContent = favorited ? "已收藏" : "收藏";
+  favoriteBtn.classList.toggle("favorite-on", favorited);
+  favoriteBtn.setAttribute("aria-pressed", favorited ? "true" : "false");
+
+  favoriteBtn.addEventListener("click", () => {
+    toggleFavoriteFingerprint(fp);
+    renderActivities();
+  });
 
   editBtn.addEventListener("click", () => {
     const nextName = prompt("活动名称（必填）", activity.name);
@@ -193,6 +231,8 @@ function createActivityItem(activity, index) {
     );
     if (nextDDL === null) return;
 
+    const oldFp = getActivityFingerprint(activity);
+
     const edited = normalizeActivity({
       name: nextName,
       summary: nextSummary,
@@ -204,8 +244,18 @@ function createActivityItem(activity, index) {
     });
 
     if (!edited) {
-      alert("保存失败：活动名称与活动概况必填。");
+      alert(`保存失败：活动名称与概况必填，且名称与概况合计不少于 ${MIN_ACTIVITY_TEXT_LEN} 个字符。`);
       return;
+    }
+
+    const newFp = getActivityFingerprint(edited);
+    if (oldFp !== newFp) {
+      const favs = loadFavoriteFingerprints();
+      if (favs.has(oldFp)) {
+        favs.delete(oldFp);
+        favs.add(newFp);
+        saveFavoriteFingerprints(favs);
+      }
     }
 
     const activities = loadActivities();
@@ -215,6 +265,12 @@ function createActivityItem(activity, index) {
   });
 
   deleteBtn.addEventListener("click", () => {
+    const fpRemove = getActivityFingerprint(activity);
+    const favs = loadFavoriteFingerprints();
+    if (favs.has(fpRemove)) {
+      favs.delete(fpRemove);
+      saveFavoriteFingerprints(favs);
+    }
     const activities = loadActivities();
     activities.splice(index, 1);
     saveActivities(activities);
@@ -226,15 +282,19 @@ function createActivityItem(activity, index) {
 
 function renderActivities() {
   const activities = loadActivities();
+  const favoriteSet = loadFavoriteFingerprints();
   activityList.innerHTML = "";
   const filtered = activities.filter((activity) => {
+    if (activeCategory === "我的收藏") {
+      return favoriteSet.has(getActivityFingerprint(activity));
+    }
     if (activeCategory === "全部") return true;
     return normalizeCategory(activity.category) === activeCategory;
   });
 
   filtered.forEach((activity) => {
     const index = activities.findIndex((stored) => isSameActivity(stored, activity));
-    activityList.appendChild(createActivityItem(activity, index));
+    activityList.appendChild(createActivityItem(activity, index, favoriteSet));
   });
 
   emptyState.style.display = filtered.length === 0 ? "block" : "none";
