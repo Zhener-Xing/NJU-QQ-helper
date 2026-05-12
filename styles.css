@@ -233,6 +233,13 @@ button.danger {
   flex: 1;
 }
 
+button.favorite-btn.favorite-on {
+  background: linear-gradient(180deg, #d4a84b, #b8892e);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #1a1410;
+  font-weight: 600;
+}
+
 .empty-state {
   margin: 12px 0 0;
   color: var(--muted);
