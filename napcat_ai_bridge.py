@@ -1,253 +1,232 @@
-* {
-  box-sizing: border-box;
-}
+import asyncio
+import json
+import os
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-:root {
-  --bg: #0f1116;
-  --panel: #181b22;
-  --panel-soft: #1d2129;
-  --line: rgba(255, 255, 255, 0.1);
-  --text: #e7eaf0;
-  --muted: #adb4c0;
-}
+import websockets
+from openai import AsyncOpenAI
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Microsoft YaHei", sans-serif;
-  background: linear-gradient(180deg, #14171d, var(--bg));
-  color: var(--text);
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-}
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+ACTIVITIES_FILE = DATA_DIR / "activities.json"
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 18px 16px 14px;
-  background: rgba(15, 17, 22, 0.95);
-  color: #f3f4f6;
-  border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(10px);
-  width: min(100%, 430px);
+NAPCAT_WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:3001")
+TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "").strip()
+TARGET_USERS = {
+    u.strip()
+    for u in os.getenv("TARGET_USERS", "").split(",")
+    if u.strip()
 }
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1").strip()
+AI_MODEL = os.getenv("AI_MODEL", "deepseek-chat").strip()
+SYSTEM_PROMPT = os.getenv(
+    "SYSTEM_PROMPT",
+    """你是QQ群活动提取助手。请从消息中提取活动信息并只返回 JSON 数组，不要解释。
+每个对象格式：
+[
+  {
+    "name": "活动名称",
+    "summary": "活动概况",
+    "location": "活动地点，没有填无",
+    "signupLink": "报名链接，没有填无",
+    "category": "五育|必做|休闲活动",
+    "eventTime": "ISO时间或空字符串",
+    "ddl": "ISO时间或空字符串"
+  }
+]
+规则：
+1) name、summary 必填；
+2) eventTime 和 ddl 至少一个有值；
+3) 信息中出现“五育”则分类为“五育”；
+4) 出现“讲座”“工坊”“分享”则分类为“休闲活动”；
+5) 其他分类为“必做”。
+如果没有有效活动，返回空数组 []。""",
+).strip()
 
-.page-header h1 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  letter-spacing: 0.01em;
-  font-weight: 650;
-}
+if not AI_API_KEY:
+    raise RuntimeError("AI_API_KEY 未配置，请在环境变量中设置。")
+if not TARGET_GROUP_ID:
+    raise RuntimeError("TARGET_GROUP_ID 未配置，请在环境变量中设置。")
 
-.page-header p {
-  margin: 0;
-  opacity: 0.78;
-  color: #c3c7d0;
-}
+client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
+lock = asyncio.Lock()
 
-.container {
-  width: min(100%, 430px);
-  margin: 0;
-  padding: 14px 14px 26px;
-  display: grid;
-  gap: 12px;
-}
 
-.panel {
-  background: linear-gradient(180deg, var(--panel-soft), var(--panel));
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
+def ensure_store() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not ACTIVITIES_FILE.exists():
+        ACTIVITIES_FILE.write_text("[]", encoding="utf-8")
 
-h2 {
-  margin-top: 0;
-  margin-bottom: 6px;
-  color: #eef1f6;
-  font-weight: 620;
-  letter-spacing: 0.01em;
-  font-size: 17px;
-}
 
-.hint {
-  color: #a8aeb9;
-  margin: 0 0 4px;
-  font-size: 13px;
-}
+def normalize_text(value: Any, fallback: str = "无") -> str:
+    text = str(value or "").strip()
+    return text if text else fallback
 
-form {
-  display: grid;
-  gap: 12px;
-}
 
-label {
-  display: block;
-  font-weight: 560;
-  color: #cfd4dd;
-  margin-bottom: 6px;
-  font-size: 13px;
-}
+def normalize_datetime(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        if "T" in raw:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        return dt.isoformat()
+    except ValueError:
+        return ""
 
-textarea,
-input,
-select {
-  width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 10px;
-  padding: 11px 12px;
-  font-size: 14px;
-  background: rgba(18, 20, 26, 0.65);
-  color: #e9ecf2;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
-}
 
-textarea::placeholder,
-input::placeholder {
-  color: #8f96a4;
-}
+def detect_category(item: dict[str, Any]) -> str:
+    direct = str(item.get("category", "")).strip()
+    pool = " ".join(
+        [
+            str(item.get("name", "")),
+            str(item.get("summary", "")),
+            str(item.get("location", "")),
+            str(item.get("sourceText", "")),
+            direct,
+        ]
+    )
+    if "五育" in pool:
+        return "五育"
+    if re.search(r"讲座|工坊|分享", pool):
+        return "休闲活动"
+    if direct in {"五育", "必做", "休闲活动"}:
+        return direct
+    return "必做"
 
-textarea:focus,
-input:focus,
-select:focus {
-  outline: none;
-  border-color: rgba(214, 219, 228, 0.65);
-  box-shadow: 0 0 0 3px rgba(214, 219, 228, 0.12);
-  background: rgba(16, 18, 24, 0.85);
-}
 
-button {
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: linear-gradient(180deg, #d3d7df, #a8aeb9);
-  color: #171a1f;
-  border-radius: 10px;
-  padding: 11px 14px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.14s ease, filter 0.2s ease, box-shadow 0.2s ease;
-}
+def normalize_activity(item: dict[str, Any]) -> dict[str, Any] | None:
+    name = normalize_text(item.get("name") or item.get("title"), "")
+    summary = normalize_text(item.get("summary") or item.get("description"), "")
+    event_time = normalize_datetime(item.get("eventTime"))
+    ddl = normalize_datetime(item.get("ddl"))
+    if not name or not summary:
+        return None
+    if not event_time and not ddl:
+        return None
+    return {
+        "name": name,
+        "summary": summary,
+        "location": normalize_text(item.get("location")),
+        "signupLink": normalize_text(item.get("signupLink")),
+        "category": detect_category(item),
+        "eventTime": event_time,
+        "ddl": ddl,
+    }
 
-button:hover {
-  filter: brightness(1.02);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
-}
 
-button.secondary {
-  background: linear-gradient(180deg, #bbc1cc, #9098a6);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: #171a1f;
-}
+def fingerprint(item: dict[str, Any]) -> str:
+    return normalize_text(item.get("name"), "").replace(" ", "").lower()
 
-button.danger {
-  background: linear-gradient(180deg, #8b909a, #6f7682);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: #f1f3f7;
-}
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
-}
+def changed(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    keys = ("summary", "location", "signupLink", "category", "eventTime", "ddl")
+    return any(old.get(k) != new.get(k) for k in keys)
 
-.toolbar {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 12px;
-}
 
-.toolbar-actions {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-}
+def parse_json_array(text: str) -> list[dict[str, Any]]:
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        raw = raw.replace("json", "", 1).strip()
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
 
-.toolbar-actions select {
-  min-width: 0;
-}
 
-.activity-list {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-}
+async def extract_activities(message: str) -> list[dict[str, Any]]:
+    response = await client.chat.completions.create(
+        model=AI_MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": message},
+        ],
+        temperature=0.1,
+    )
+    content = response.choices[0].message.content or "[]"
+    raw_items = parse_json_array(content)
+    return [item for item in (normalize_activity(x) for x in raw_items) if item]
 
-.activity-item {
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 12px;
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-  background: linear-gradient(180deg, rgba(22, 25, 31, 0.9), rgba(17, 20, 26, 0.9));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
 
-.item-title {
-  margin: 0 0 6px;
-  font-weight: 700;
-  color: #f0f3f8;
-}
+async def upsert_activities(items: list[dict[str, Any]]) -> None:
+    if not items:
+        return
+    async with lock:
+        ensure_store()
+        stored = json.loads(ACTIVITIES_FILE.read_text(encoding="utf-8"))
+        if not isinstance(stored, list):
+            stored = []
+        merged = list(stored)
+        for item in items:
+            fp = fingerprint(item)
+            idx = next(
+                (i for i, it in enumerate(merged) if fingerprint(it) == fp),
+                -1,
+            )
+            if idx == -1:
+                merged.append(item)
+            elif changed(merged[idx], item):
+                merged[idx] = {**merged[idx], **item}
+        ACTIVITIES_FILE.write_text(
+            json.dumps(merged, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
-.item-meta {
-  margin: 0;
-  color: #acb3bf;
-  font-size: 13px;
-  line-height: 1.6;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
 
-.item-meta .meta-line {
-  margin: 0;
-  word-break: break-word;
-}
+async def process_message(raw_message: str, group_id: str, user_id: str) -> None:
+    try:
+        items = await extract_activities(raw_message)
+        await upsert_activities(items)
+        if items:
+            print(f"✅ 已写入/更新 {len(items)} 条活动，group={group_id}, user={user_id}")
+    except Exception as exc:
+        print(f"❌ 处理消息失败: {exc}")
 
-.item-meta a {
-  color: #8ab4f8;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 
-.item-meta a:hover {
-  color: #b8d2ff;
-}
+async def message_loop() -> None:
+    while True:
+        try:
+            async with websockets.connect(NAPCAT_WS_URL) as ws:
+                print(f"🤖 已连接 NapCat: {NAPCAT_WS_URL}")
+                async for payload in ws:
+                    try:
+                        data = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if data.get("post_type") != "message":
+                        continue
+                    if data.get("message_type") != "group":
+                        continue
+                    group_id = str(data.get("group_id", ""))
+                    user_id = str(data.get("user_id", ""))
+                    raw_message = str(data.get("raw_message", "")).strip()
+                    if not raw_message:
+                        continue
+                    if group_id != TARGET_GROUP_ID:
+                        continue
+                    if TARGET_USERS and user_id not in TARGET_USERS:
+                        continue
+                    print(f"📩 group={group_id} user={user_id}: {raw_message[:100]}")
+                    asyncio.create_task(
+                        process_message(raw_message, group_id, user_id)
+                    )
+        except Exception as exc:
+            print(f"❌ NapCat 连接异常: {exc}，5秒后重连")
+            await asyncio.sleep(5)
 
-.item-actions {
-  display: flex;
-  gap: 8px;
-}
 
-.item-actions button {
-  flex: 1;
-}
-
-button.favorite-btn.favorite-on {
-  background: linear-gradient(180deg, #d4a84b, #b8892e);
-  border-color: rgba(255, 255, 255, 0.22);
-  color: #1a1410;
-  font-weight: 600;
-}
-
-.activity-item-deleted {
-  opacity: 0.6;
-  border-style: dashed;
-}
-
-.empty-state {
-  margin: 12px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-}
+if __name__ == "__main__":
+    ensure_store()
+    asyncio.run(message_loop())
