@@ -18,10 +18,14 @@ POLL_STATE_FILE = DATA_DIR / "napcat_poll_state.json"
 def resolve_napcat_http_url() -> str:
     explicit = os.getenv("NAPCAT_HTTP_URL", "").strip()
     if explicit:
-        return explicit.rstrip("/")
-    default_host = "host.docker.internal" if Path("/.dockerenv").exists() else "127.0.0.1"
-    port = os.getenv("NAPCAT_HTTP_PORT", "3002").strip() or "3002"
-    return f"http://{default_host}:{port}"
+        url = explicit.rstrip("/")
+    else:
+        port = os.getenv("NAPCAT_HTTP_PORT", "3002").strip() or "3002"
+        url = f"http://127.0.0.1:{port}"
+    # Linux 容器内 host.docker.internal 常指向 172.17.0.1，连不上只监听 127.0.0.1 的 NapCat
+    if Path("/.dockerenv").exists() and "host.docker.internal" in url:
+        url = url.replace("host.docker.internal", "127.0.0.1")
+    return url
 
 
 NAPCAT_HTTP_URL = resolve_napcat_http_url()
@@ -351,6 +355,12 @@ async def poll_loop() -> None:
                     save_poll_state(state)
             except Exception as exc:
                 print(f"❌ NapCat HTTP 请求失败: {exc}，{NAPCAT_POLL_INTERVAL}秒后重试")
+                if "Connect call failed" in str(exc) or "Cannot connect" in str(exc):
+                    print(
+                        f"   提示: 在宿主机执行 curl -s {napcat_api_url(NAPCAT_HISTORY_PATH)} "
+                        f"-H 'Content-Type: application/json' "
+                        f"-d '{{\"group_id\":{TARGET_GROUP_ID},\"count\":1}}' 检查 NapCat 是否在监听"
+                    )
             await asyncio.sleep(NAPCAT_POLL_INTERVAL)
 
 
